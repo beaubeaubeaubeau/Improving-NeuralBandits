@@ -1,6 +1,7 @@
 from algorithm.neuralbandit import NeuralBandit1
 from ucimlrepo import fetch_ucirepo
 import numpy as np
+import matplotlib.pyplot as plt
 
 if __name__ == "__main__":
     seed = 0
@@ -14,21 +15,37 @@ if __name__ == "__main__":
     
     n_arms = 7
 
-    bandit = NeuralBandit1(
+    rng = np.random.default_rng(seed)
+    order = rng.permutation(len(X))[:n]
+
+    bandits = {
+        'Epsilon greedy': NeuralBandit1(
         n_features=X.shape[1],
         n_arms=n_arms,
         n_hidden=25,
         lr=0.01,
         gamma=0.05,
         seed=seed,
-    )
+        exploration='epsilon'
+        ),
+        'Thompson sampling': NeuralBandit1(
+        n_features=X.shape[1],
+        n_arms=n_arms,
+        n_hidden=25,
+        lr=0.01,
+        gamma=0.05,
+        seed=seed,
+        exploration='thompson'
+        ),
+    }
 
-    rng = np.random.default_rng(seed)
-    order = rng.permutation(len(X))[:n]
-
+    regrets = {
+        name: np.zeros(len(order), dtype=np.int64)
+        for name in ("Random", *bandits)
+    }
+    totals = dict.fromkeys(regrets, 0)
     mean = np.zeros(10)
     sum_squared_deviations = np.zeros(10)
-    correct_predictions = 0
 
     for t, index in enumerate(order, start=1):
         context = X[index].copy()
@@ -40,17 +57,32 @@ if __name__ == "__main__":
         std = np.sqrt(sum_squared_deviations / t)
         context[:10] = (values - mean) / np.maximum(std, 1.0)
 
-        arm, probability = bandit.select(context)
-        correct = int(arm == y[index])
-        bandit.update(context, arm, correct, probability)
+        random_arm = rng.integers(n_arms)
+        totals["Random"] += int(random_arm != y[index])
+        regrets["Random"][t - 1] = totals["Random"]
 
-        correct_predictions += correct
-        if t % report_every == 0 or t == len(order):
-            print(
-                f"round={t:6d}  "
-                f"classification accuracy={correct_predictions / t:.3f}  "
-                f"cumulative regret={t - correct_predictions}"
-            )
+        for name, bandit in bandits.items():
+            arm, probability = bandit.select(context)
+            reward = int(arm == y[index])
+            bandit.update(context, arm, reward, probability)
 
-    print(f"Uniform random baseline: {1 / n_arms:.3f}")
+            totals[name] += 1 - reward
+            regrets[name][t - 1] = totals[name]
+
+        if t % 1000 == 0 or t == len(order):
+            print(f"Round {t}: " + ", ".join(
+                f"{name} regret={total}" for name, total in totals.items()
+            ))
+
+    rounds = np.arange(1, len(order) + 1)
+    plt.plot(rounds, regrets["Random"], ":", label="Random")
+    plt.plot(rounds, regrets["Epsilon greedy"], "--", label="Epsilon greedy")
+    plt.plot(rounds, regrets["Thompson sampling"], "-", label="Thompson sampling")
+    plt.xlabel("Time steps")
+    plt.ylabel("Cumulative regret")
+    plt.grid(axis="y", alpha=0.5)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig("cumulative_regret.png", dpi=150)
+    plt.show()
     
