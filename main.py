@@ -1,7 +1,5 @@
 from algorithm.neuralbandit import NeuralBandit1
-from exploration.epsilon_greedy import epsilon_greedy_probabilities
 from ucimlrepo import fetch_ucirepo
-import pandas as pd
 import numpy as np
 
 if __name__ == "__main__":

@@ -1,15 +1,25 @@
-from exploration.epsilon_greedy import epsilon_greedy_probabilities
 import numpy as np
 import torch
 import torch.nn as nn
 
+from exploration.epsilon_greedy import epsilon_greedy_probabilities
+from exploration.thompson_sampling import ThompsonSampling
+
 class NeuralBandit1:
-    def __init__(self, n_features, n_arms, n_hidden=25, lr=0.01, gamma=0.005, seed=None):
+    def __init__(self, n_features, n_arms, n_hidden=25, lr=0.01, gamma=0.005, seed=None, exploration="epsilon_greedy"):
         if seed is not None:
             torch.manual_seed(seed)
         self.rng = np.random.default_rng(seed)
         self.K = n_arms
         self.gamma = gamma
+        self.exploration = exploration
+        self.thompson = None
+        if exploration == "thompson":
+            self.thompson = ThompsonSampling(
+                n_features=n_features,
+                n_arms=n_arms,
+                gamma=gamma,
+            )
         self.nets = [
             nn.Sequential(
                 nn.Linear(n_features, n_hidden),
@@ -23,15 +33,16 @@ class NeuralBandit1:
         self.loss_fn = nn.MSELoss()
 
     def _probs(self, x):
-        """Predicted rewards for each arm and the exploration distribution P_t."""
         with torch.no_grad():
             preds = np.array([net(x).item() for net in self.nets])
 
-        p = epsilon_greedy_probabilities(preds, self.gamma)
-        return preds, p
+        if self.thompson is None:
+            probabilities = epsilon_greedy_probabilities(preds, self.gamma)
+        else:
+            probabilities = self.thompson.probabilities(preds, x.detach().cpu().numpy(), self.rng)
+        return preds, probabilities
 
     def select(self, context):
-        """Return (chosen arm, probability with which it was chosen)."""
         x = torch.as_tensor(context, dtype=torch.float32)
         _, p = self._probs(x)
         k = self.rng.choice(self.K, p=p)
@@ -43,7 +54,11 @@ class NeuralBandit1:
         y = torch.tensor([float(reward)])
         net, opt = self.nets[arm], self.opts[arm]
         opt.zero_grad()
-        loss = self.loss_fn(net(x), y) / prob 
+        pred = net(x)
+        loss = self.loss_fn(pred, y) / prob 
         loss.backward()
         opt.step()
+
+        if self.thompson is not None:
+            self.thompson.update(context, arm, reward, pred.detach().item())
 
